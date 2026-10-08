@@ -43,6 +43,9 @@ jobs:
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
       - name: Build audio XCFramework
         run: |
           set -euo pipefail
