@@ -33,7 +33,7 @@ jobs:
 
           git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/brandomoore/Mozz.git
-          git fetch upstream main --tags
+          git fetch upstream main --no-tags
 
           if git diff --quiet HEAD upstream/main; then
             echo 'No upstream changes.'
