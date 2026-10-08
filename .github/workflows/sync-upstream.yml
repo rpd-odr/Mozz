@@ -1,0 +1,73 @@
+name: Sync upstream and build iOS IPA
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/sync-upstream.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: mozz-upstream-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync upstream
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/brandomoore/Mozz.git
+          git fetch upstream main --tags
+
+          if git diff --quiet HEAD upstream/main; then
+            echo 'No upstream changes.'
+            exit 0
+          fi
+
+          git merge --no-edit -X ours upstream/main
+          git push origin main
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*["'"'"']\([^"'"'"']*\)["'"'"'][[:space:]]*$/\1/p' project.yml | head -1)"
+          [ -n "$version" ] || { echo '::error::MARKETING_VERSION not found'; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release if missing
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            exit 0
+          fi
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            git tag -d "$TAG" 2>/dev/null || true
+            git tag "$TAG" HEAD
+            git push origin "$TAG"
+          fi
+
+          gh workflow run ios-release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
