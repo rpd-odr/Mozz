@@ -72,4 +72,4 @@ jobs:
           git push origin "$TAG"
 
           gh workflow run ios-release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
-# Triggered intentionally to kick the automation after the previous cancelled run.
+# Triggered intentionally to rerun after build-tool fix.
