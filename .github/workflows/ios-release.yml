@@ -1,0 +1,73 @@
+name: iOS IPA Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mozz-ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project Mozz.xcodeproj
+
+      - name: Build unsigned iOS archive
+        run: |
+          set -euo pipefail
+          rm -rf build
+          xcodebuild archive             -project Mozz.xcodeproj             -scheme Mozz             -configuration Release             -sdk iphoneos             -archivePath build/Mozz.xcarchive             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             DEVELOPMENT_TEAM=
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+          APP='build/Mozz.xcarchive/Products/Applications/Mozz.app'
+          [ -d "$APP" ] || { echo "::error::Mozz.app not found"; exit 1; }
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/Mozz.app
+          VERSION="${GITHUB_REF_NAME#v}"
+          IPA="Mozz-${VERSION}.ipa"
+          (cd build && zip -qry "../$IPA" Payload)
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+          ls -lh "$IPA"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Mozz ${{ github.ref_name }}
+          body: |
+            Unsigned iOS IPA built automatically from the upstream Mozz source.
+            
+            - iOS/iPadOS build only
+            - No Apple signing credentials are included
+            - Install with AltStore/SideStore or sign with your own certificate
+          files: ${{ steps.package.outputs.ipa }}
