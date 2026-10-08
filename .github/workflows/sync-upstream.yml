@@ -47,7 +47,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*["'"'"']\([^"'"'"']*\)["'"'"'][[:space:]]*$/\1/p' project.yml | head -1)"
+          version="$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*["'"'']\([^"'"'']*\)["'"''][[:space:]]*$/\1/p' project.yml | head -1)"
           [ -n "$version" ] || { echo '::error::MARKETING_VERSION not found'; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
@@ -58,13 +58,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          FORCE_REBUILD=false
+          if git log -1 --pretty=%B | grep -q '\[force-rebuild\]'; then
+            FORCE_REBUILD=true
+            echo 'Force rebuild requested by commit message.'
+          fi
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE_REBUILD" != true ]; then
             echo "Release $TAG already exists."
             exit 0
           fi
 
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG exists but release does not; moving tag to current fork commit."
+            echo "Retargeting fork tag $TAG to current HEAD."
             git push origin ":refs/tags/$TAG"
             git tag -d "$TAG" 2>/dev/null || true
           fi
@@ -72,4 +78,3 @@ jobs:
           git push origin "$TAG"
 
           gh workflow run ios-release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
-# Triggered intentionally to rerun after build-tool fix.
