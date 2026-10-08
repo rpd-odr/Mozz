@@ -2,8 +2,7 @@ name: iOS IPA Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -15,85 +14,83 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 90
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+        with: {fetch-depth: 0}
       - name: Select Xcode
         run: |
           set -euo pipefail
           xcodebuild -version
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
       - name: Install XcodeGen
         run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: ./tools/generate-project.sh
-
-      - name: Configure side-load entitlements
+      - name: Prepare standalone project
         run: |
           set -euo pipefail
+          cp project.yml project.yml.ci-backup
           cat > App/Mozz/Mozz.sideload.entitlements <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-              <key>com.apple.security.application-groups</key>
-              <array><string>group.com.thatcube.Mozz</string></array>
-          </dict></plist>
+          <plist version="1.0"><dict/></plist>
           EOF
-
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path("project.yml"); text=p.read_text()
+          text=text.replace("      - target: MozzWidget\n","")
+          start=text.find("\n  MozzWidget:")
+          end=text.find("\n  MozzUITests:",start)
+          if start!=-1 and end!=-1: text=text[:start]+text[end:]
+          text=text.replace("      path: App/Mozz/Mozz.entitlements","      path: App/Mozz/Mozz.sideload.entitlements")
+          p.write_text(text)
+          PY
+          export GIT_CONFIG_PARAMETERS="'safe.bareRepository=all'"
+          ./tools/generate-project.sh
+          mv -f project.yml.ci-backup project.yml
+          rm -f App/Mozz/Mozz.sideload.entitlements
       - name: Install Rust
         run: |
           set -euo pipefail
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-
       - name: Install cbindgen
         run: cargo install cbindgen --locked
-
       - name: Build audio XCFramework
         run: |
           set -euo pipefail
           ./tools/build-audio-xcframework.sh --all
           test -f audio/target/MozzAudioFFI.xcframework/Info.plist
-
       - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project Mozz.xcodeproj
-
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_PARAMETERS="'safe.bareRepository=all'"
+          xcodebuild -resolvePackageDependencies -project Mozz.xcodeproj
       - name: Build unsigned iOS archive
         run: |
           set -euo pipefail
           rm -rf build
-          xcodebuild archive             -project Mozz.xcodeproj             -scheme Mozz             -configuration Release             -sdk iphoneos             -archivePath build/Mozz.xcarchive             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             DEVELOPMENT_TEAM= \
-            CODE_SIGN_ENTITLEMENTS=App/Mozz/Mozz.sideload.entitlements
-
-      - name: Verify side-load entitlements
+          xcodebuild archive \
+            -project Mozz.xcodeproj -scheme Mozz -configuration Release \
+            -sdk iphoneos -archivePath build/Mozz.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=
+      - name: Verify standalone entitlements
         run: |
           set -euo pipefail
           APP='build/Mozz.xcarchive/Products/Applications/Mozz.app'
           test -d "$APP"
-          if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q 'com.apple.developer.siri'; then
-            echo '::error::Siri entitlement leaked into side-load IPA'
+          if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -Eq 'com\.apple\.developer\.(siri|carplay-audio|icloud|associated-domains|aps-environment)'; then
+            echo '::error::Apple capability entitlement leaked into standalone Mozz IPA'
             exit 1
           fi
-          if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q 'com.apple.developer.carplay-audio'; then
-            echo '::error::CarPlay entitlement leaked into side-load IPA'
-            exit 1
-          fi
-
       - name: Package IPA
         id: package
         run: |
           set -euo pipefail
           APP='build/Mozz.xcarchive/Products/Applications/Mozz.app'
-          [ -d "$APP" ] || { echo "::error::Mozz.app not found"; exit 1; }
+          test -d "$APP"
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/Mozz.app
           VERSION="${GITHUB_REF_NAME#v}"
@@ -101,16 +98,15 @@ jobs:
           (cd build && zip -qry "../$IPA" Payload)
           echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
           ls -lh "$IPA"
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Mozz ${{ github.ref_name }}
           body: |
-            Unsigned iOS IPA built automatically from the upstream Mozz source.
-            
+            Unsigned standalone iOS IPA built automatically from upstream Mozz.
             - iOS/iPadOS build only
+            - Production Siri / CarPlay / iCloud / Push / Associated Domains capabilities are stripped
             - No Apple signing credentials are included
             - Install with AltStore/SideStore or sign with your own certificate
           files: ${{ steps.package.outputs.ipa }}
