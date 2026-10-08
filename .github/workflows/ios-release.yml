@@ -36,6 +36,19 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Build audio XCFramework
+        run: |
+          set -euo pipefail
+          ./tools/build-audio-xcframework.sh --all
+          test -f audio/target/MozzAudioFFI.xcframework/Info.plist
+
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project Mozz.xcodeproj
 
