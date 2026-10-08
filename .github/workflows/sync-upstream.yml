@@ -63,10 +63,12 @@ jobs:
             exit 0
           fi
 
-          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG exists but release does not; moving tag to current fork commit."
+            git push origin ":refs/tags/$TAG"
             git tag -d "$TAG" 2>/dev/null || true
-            git tag "$TAG" HEAD
-            git push origin "$TAG"
           fi
+          git tag "$TAG" HEAD
+          git push origin "$TAG"
 
           gh workflow run ios-release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
